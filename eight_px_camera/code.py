@@ -86,7 +86,7 @@ join_msg = {"type": "join", "stream": STREAM_NAME}
 ws.send(json.dumps(join_msg))
 print(f"Joined stream: {STREAM_NAME}")
 
-# Main loop - send temperature every 10 seconds
+# Main loop 
 print("\nStarting streaming light readings...")
 last_send = time.monotonic()
 SEND_INTERVAL = 0.05  # seconds (20 readings/sec - adjust as needed)
