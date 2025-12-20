@@ -114,9 +114,11 @@ def calibrate_white_balance():
 def rgb():
     channels = get_channels() # a dict, ignoring the data you don't need
 
-    # print(channels)
+    # Calculate total intensity BEFORE normalization (preserves brightness info)
+    total_intensity = sum(channels.values())
+
+    # Normalize to get spectral proportions (color information)
     normalized = normalize(channels)
-    # print(normalized)
 
     # Improved weights based on human color perception
     # Red: peaks at longer wavelengths (630-680nm)
@@ -129,21 +131,27 @@ def rgb():
     # Blue: peaks around 450nm, include violet channel
     b = 0.3 * normalized["F1"] + 1.0 * normalized["F2"] + 0.5 * normalized["F3"]
 
-    # Scale up brightness (sum normalization produces small values)
-    # Multiply by number of channels to compensate
-    BRIGHTNESS_SCALE = 8.0
-    r *= BRIGHTNESS_SCALE
-    g *= BRIGHTNESS_SCALE
-    b *= BRIGHTNESS_SCALE
+    # Scale by total intensity to preserve brightness information
+    # The normalized values (r,g,b) are proportions that sum to fractions
+    # We need to scale them by brightness to get actual RGB values
+    # Typical indoor total_intensity: 10,000-50,000
+    # Typical outdoor total_intensity: 100,000-300,000
+    # Scale factor chosen to map typical indoor to mid-range RGB
+    BRIGHTNESS_SCALE = 8.0  # Compensates for 8-channel normalization
+    INTENSITY_REFERENCE = 30000  # Reference intensity for calibration
 
-    # Normalize RGB values if any exceed 1.0
-    max_rgb = max(r, g, b)
-    if max_rgb > 1.0:
-        r /= max_rgb
-        g /= max_rgb
-        b /= max_rgb
+    brightness_factor = (total_intensity / INTENSITY_REFERENCE) * BRIGHTNESS_SCALE
 
-    # convert to a 0-255 scale:
+    r *= brightness_factor
+    g *= brightness_factor
+    b *= brightness_factor
+
+    # Clamp to 0-1 range before final scaling
+    r = min(1.0, max(0.0, r))
+    g = min(1.0, max(0.0, g))
+    b = min(1.0, max(0.0, b))
+
+    # Final scaling to 0-255 range
     r_int = int(r * 255)
     g_int = int(g * 255)
     b_int = int(b * 255)

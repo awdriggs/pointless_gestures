@@ -48,7 +48,8 @@ ws.onmessage = (event) => {
       // data.values is an array of 8 integers (0-65535)
       // data.max is 65535
       maxValue = data.max;
-      lightValues = data.values;
+      // lightValues = data.values;
+      handleReading(data.values);   
     }
   } catch (error) {
     console.error('Error parsing message:', error);

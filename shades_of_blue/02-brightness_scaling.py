@@ -3,7 +3,6 @@ import busio  # Use busio for I2C communication
 import digitalio
 import time
 from adafruit_as7341 import AS7341
-from adafruit_debouncer import Debouncer
 from os import getenv
 import ipaddress
 import wifi
@@ -21,24 +20,8 @@ print()
 # blue qt stemma cable goes to 16 for sda
 # yellow qt stemma calbe goes to 17 for scl
 # i2c = busio.I2C(scl=board.GP17, sda=board.GP16)  # Replace with the correct pins
-i2c = busio.I2C(scl=board.GP15, sda=board.GP14)  #using i2c1 here
+i2c = busio.I2C(scl=board.GP15, sda=board.GP14)  #using i2c1 here 
 sensor = AS7341(i2c) #color sensor on a breakout board
-
-# Configure sensor for faster reads
-# Lower atime = faster but less sensitive. Range: 0-255, each step = 2.78ms
-# Default is 100 (278ms). Lower values like 29 (~81ms) or 10 (~28ms) are faster
-sensor.atime = 29  # Integration time (lower = faster reads)
-sensor.astep = 599  # Integration step (affects precision)
-sensor.gain = 8  # Gain: 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 (higher = more sensitive)
-print(f"Sensor configured: atime={sensor.atime}, astep={sensor.astep}, gain={sensor.gain}")
-
-# Button for white balance calibration
-button_pin = digitalio.DigitalInOut(board.GP12)
-button_pin.direction = digitalio.Direction.INPUT
-button_pin.pull = digitalio.Pull.UP  # Button connects to ground when pressed
-button = Debouncer(button_pin)
-
-print(f"Button initial state: {button_pin.value}")  # Should be True (HIGH) when not pressed
 
 # wifi business
 # Get WiFi details, ensure these are setup in settings.toml
@@ -85,30 +68,6 @@ ws.settimeout(0.1)  # Make recv() non-blocking with 0.1 second timeout
 join_msg = {"type": "join", "stream": STREAM_NAME}
 ws.send(json.dumps(join_msg))
 print(f"Joined stream: {STREAM_NAME}")
-
-# White balance reference (captured during calibration)
-white_balance_ref = None
-
-def calibrate_white_balance():
-    """Capture current spectral reading as white reference for color balancing"""
-    global white_balance_ref
-    print("\n=== WHITE BALANCE CALIBRATION ===")
-    print("Capturing white reference...")
-
-    # Take 3 quick samples and average (reduced from 5 for speed)
-    samples = []
-    for i in range(3):
-        samples.append(get_channels())
-        time.sleep(0.02)  # Reduced from 0.1s for faster calibration
-
-    # Average the samples
-    white_balance_ref = {}
-    for key in samples[0].keys():
-        white_balance_ref[key] = sum(s[key] for s in samples) / len(samples)
-
-    print("White balance captured!")
-    print(f"Reference: {white_balance_ref}")
-    print("=" * 40)
 
 # function to convert spectral values to rgb values
 def rgb():
@@ -166,17 +125,6 @@ def get_channels(): #package the channels as a dict
 
 # function that normalizes according to total spectral intensity
 def normalize(channels):
-    # Apply white balance if calibrated
-    if white_balance_ref is not None:
-        # Divide each channel by its white reference to correct color temperature
-        balanced = {}
-        for key, value in channels.items():
-            if white_balance_ref[key] > 0:
-                balanced[key] = value / white_balance_ref[key]
-            else:
-                balanced[key] = 0
-        channels = balanced
-
     # Sum all spectral channels to get total light intensity
     total = sum(channels.values())
     if total == 0:
@@ -191,20 +139,13 @@ def normalize(channels):
 
 print("\nStarting streaming light readings...")
 last_send = time.monotonic()
-SEND_INTERVAL = 1.0  # seconds (1 reading/sec as requested)
+SEND_INTERVAL = 0.05  # seconds (20 readings/sec - adjust as needed)
+
 
 while True:
     try:
-        # Tight button checking loop - runs many times per sensor read
-        for _ in range(10):  # Check button 10 times
-            button.update()
-            if button.fell:
-                print("\n*** BUTTON PRESSED - STARTING CALIBRATION ***")
-                calibrate_white_balance()
-                print("*** CALIBRATION COMPLETE - RESUMING ***\n")
-            time.sleep(0.001)  # 1ms between button checks
-
         # Check for incoming messages (ping/pong handling)
+        # This allows the library to respond to server pings
         try:
             msg = ws.recv()  # Non-blocking due to settimeout(0.1)
             if msg:
@@ -214,23 +155,19 @@ while True:
 
         # Send light readings at regular intervals
         if time.monotonic() - last_send >= SEND_INTERVAL:
-            sensor_start = time.monotonic()
             values = rgb()
-            sensor_time = time.monotonic() - sensor_start
-
             # Send light data
-            try:
-                data_msg = {
-                    "type": "data",
-                    "values": values
-                }
-                ws.send(json.dumps(data_msg))
-                print(f"Sent RGB: {values} (sensor read: {sensor_time*1000:.1f}ms)")
-                print("-" * 80)
-            except Exception as e:
-                print(f"Error sending data: {e}")
-
+            data_msg = {
+                "type": "data",
+                # "max": 65535,
+                "values": values
+            }
+            ws.send(json.dumps(data_msg))
+            print(f"Sent to server: {len(values)}")
+            print("-" * 80)
             last_send = time.monotonic()
+
+        time.sleep(0.01)  # Small delay to prevent busy-waiting
 
     except OSError as e:
         if e.errno == 32:  # Broken pipe
