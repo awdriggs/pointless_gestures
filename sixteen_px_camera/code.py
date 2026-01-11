@@ -1,0 +1,159 @@
+import board
+import busio
+import digitalio
+import time
+from adafruit_mcp3xxx.mcp3008 import MCP3008
+from adafruit_mcp3xxx.analog_in import AnalogIn
+from os import getenv
+import ipaddress
+import wifi
+import socketpool
+import microcontroller
+import json
+import cpwebsockets.client
+
+print("8 pixel camera")
+print("16-bit resolution (0-65535)")
+print()
+
+# Create SPI bus
+# left side pixels, colums 0, 1
+spi0 = busio.SPI(clock=board.GP2, MISO=board.GP0, MOSI=board.GP3)
+# right side pixels, columns 2, 3 
+spi1 = busio.SPI(clock=board.GP14, MISO=board.GP12, MOSI=board.GP15)
+
+# Create chip select
+cs0 = digitalio.DigitalInOut(board.GP1)
+cs1 = digitalio.DigitalInOut(board.GP13)
+
+# Create MCP3008 object
+mcp0 = MCP3008(spi0, cs0)
+mcp1 = MCP3008(spi1, cs1)
+
+# Create analog inputs for all 8 channels
+channels0 = [AnalogIn(mcp0, i) for i in range(8)]
+channels1 = [AnalogIn(mcp1, i) for i in range(8)]
+
+# wifi business
+# Get WiFi details, ensure these are setup in settings.toml
+ssid = getenv("CIRCUITPY_WIFI_SSID")
+password = getenv("CIRCUITPY_WIFI_PASSWORD")
+
+if None in [ssid, password]:
+    raise RuntimeError(
+            "WiFi settings are kept in settings.toml, "
+            "please add them there. The settings file must contain "
+            "'CIRCUITPY_WIFI_SSID', 'CIRCUITPY_WIFI_PASSWORD', "
+            "at a minimum."
+            )
+
+print()
+print("Connecting to WiFi")
+
+#  connect to your SSID
+try:
+    wifi.radio.connect(ssid, password)
+except TypeError:
+    print("Could not find WiFi info. Check your settings.toml file!")
+    raise
+
+print("Connected to WiFi")
+
+pool = socketpool.SocketPool(wifi.radio)
+
+#  prints MAC address to REPL
+print("My MAC addr:", [hex(i) for i in wifi.radio.mac_address])
+
+#  prints IP address to REPL
+print(f"My IP address is {wifi.radio.ipv4_address}")
+
+# Sockets Business
+WS_URL = "wss://micro-api.awdokku.site/"
+STREAM_NAME = "sixteen-px"
+
+print("\nConnecting to WebSocket server...")
+ws = cpwebsockets.client.connect(WS_URL, wifi.radio)
+ws.settimeout(0.1)  # Make recv() non-blocking with 0.1 second timeout
+
+# Join the temperature stream
+join_msg = {"type": "join", "stream": STREAM_NAME}
+ws.send(json.dumps(join_msg))
+print(f"Joined stream: {STREAM_NAME}")
+
+# Main loop 
+print("\nStart of streaming light readings...")
+last_send = time.monotonic()
+SEND_INTERVAL = 0.05  # seconds (20 readings/sec - adjust as needed)
+
+# Function to read all 16 phototransistor channels in pixel order
+def get_reading():
+    # Read 4x4 grid in pixel order (left to right, top to bottom)
+    # ADC mapping: channels alternate between columns
+    # mcp0: ch0=col0,row0  ch1=col1,row0  ch2=col0,row1  ch3=col1,row1 ...
+    # mcp1: ch0=col2,row0  ch1=col3,row0  ch2=col2,row1  ch3=col3,row1 ...
+    DATA = []
+
+    for row in range(4):
+        # Each row uses 2 channels from each ADC
+        chan_index = row * 2
+
+        # Columns 0 and 1 from mcp0
+        val0 = channels0[chan_index].value
+        val1 = channels0[chan_index + 1].value
+        DATA.append(val0)
+        DATA.append(val1)
+
+        # Columns 2 and 3 from mcp1
+        val2 = channels1[chan_index].value
+        val3 = channels1[chan_index + 1].value
+        DATA.append(val2)
+        DATA.append(val3)
+
+        print(f"Row {row}: {val0:5d}  {val1:5d}  {val2:5d}  {val3:5d}")
+
+    print()  # Extra line after all 16 pixels
+    return DATA 
+
+while True:
+    try:
+        # Check for incoming messages (ping/pong handling)
+        # This allows the library to respond to server pings
+        try:
+            msg = ws.recv()  # Non-blocking due to settimeout(0.1)
+            if msg:
+                print(f"Received: {msg}")
+        except:
+            pass  # No message available or timeout, that's OK
+
+        # Send light readings at regular intervals
+        if time.monotonic() - last_send >= SEND_INTERVAL:
+            values = get_reading()
+            # Send light data
+            data_msg = {
+                "type": "data",
+                "max": 65535,
+                "values": values
+            }
+            ws.send(json.dumps(data_msg))
+            print(f"Sent to server: {len(values)} channels")
+            print("-" * 80)
+            last_send = time.monotonic()
+
+        time.sleep(0.01)  # Small delay to prevent busy-waiting
+
+    except OSError as e:
+        if e.errno == 32:  # Broken pipe
+            print(f"Connection lost (Error {e.errno})")
+        else:
+            print(f"Error: {e}")
+        print("Reconnecting...")
+        time.sleep(5)
+        try:
+            ws.close()
+        except:
+            pass
+        ws = cpwebsockets.client.connect(WS_URL, wifi.radio)
+        ws.settimeout(0.1)  # Make recv() non-blocking
+        ws.send(json.dumps(join_msg))
+
+
