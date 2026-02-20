@@ -191,7 +191,7 @@ def normalize(channels):
 
 print("\nStarting streaming light readings...")
 last_send = time.monotonic()
-SEND_INTERVAL = 1.0  # seconds (1 reading/sec as requested)
+SEND_INTERVAL = 67.5
 
 while True:
     try:
@@ -213,7 +213,8 @@ while True:
             pass  # No message available or timeout, that's OK
 
         # Send light readings at regular intervals
-        if time.monotonic() - last_send >= SEND_INTERVAL:
+        now = time.monotonic()
+        if now - last_send >= SEND_INTERVAL:
             sensor_start = time.monotonic()
             values = rgb()
             sensor_time = time.monotonic() - sensor_start
@@ -230,7 +231,7 @@ while True:
             except Exception as e:
                 print(f"Error sending data: {e}")
 
-            last_send = time.monotonic()
+            last_send = now
 
     except OSError as e:
         if e.errno == 32:  # Broken pipe

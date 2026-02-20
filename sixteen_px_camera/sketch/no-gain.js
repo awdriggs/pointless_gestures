@@ -3,8 +3,6 @@ console.log("sketching bro");
 let values = [];
 let cellWidth, cellHeight;
 let numRows = 4, numCols = 4;
-let gainSlider;
-let lastRaw = [];
 
 function setup() {
   // createCanvas(windowWidth, windowHeight);
@@ -13,13 +11,6 @@ function setup() {
   cellWidth = width/4
   // let numCols = width; //this won't be exact on fullscreen!
   // cellWidth = width/numCols; //roughly square
-
-  gainSlider = createSlider(1, 20, 1, 0.1);
-  gainSlider.position(20, height + 10);
-  gainSlider.style('width', '200px');
-  gainSlider.input(() => {
-    if (lastRaw.length) handleReading(lastRaw);
-  });
 
   noStroke();
   noLoop();
@@ -43,25 +34,17 @@ function draw() {
   } else {
     text("waiting for incoming data from server", 20, 20);
   }
-
-  // gain label
-  fill(0);
-  noStroke();
-  textSize(14);
-  text(`gain: ${gainSlider.value().toFixed(1)}x`, 230, height + 24);
 }
 
 function handleReading(rawValues){
 
-  lastRaw = rawValues; // store for slider redraws
   values = []; //clear values
 
-  let gain = gainSlider.value();
-
   for(let raw of rawValues){
-    let c = constrain(map(raw, 0, maxValue, 0, 255) * gain, 0, 255);
+    let c = map(raw, 0, maxValue, 0, 255);
     values.push(c); //update values
   }
+
 
   redraw();
 }

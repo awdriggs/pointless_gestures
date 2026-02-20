@@ -12,7 +12,7 @@ import microcontroller
 import json
 import cpwebsockets.client
 
-print("8 pixel camera")
+print("16 pixel camera")
 print("16-bit resolution (0-65535)")
 print()
 
