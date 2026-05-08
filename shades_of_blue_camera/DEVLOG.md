@@ -43,3 +43,9 @@ Note: `cam.deinit()` alone (releasing PIO) did not fix the issue. The camera har
 - `../shades_of_blue/code.py` - working reference (AS7341 sensor, same server)
 - `../../micro-api/websocket/heartbeat.js` - server heartbeat (30s interval)
 - `../../micro-api/controllers/shadesOfBlueController.js` - server handler for this stream
+
+## 2026-05-08: Temperature + device ID added
+
+- Added `DEVICE_ID = "ams01"` constant, included in all outgoing messages
+- Added `microcontroller.cpu.temperature` read after each capture, sent as `temp_c` in the values payload
+- `microcontroller` was already imported, no new dependencies

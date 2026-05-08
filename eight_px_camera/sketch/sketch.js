@@ -63,3 +63,10 @@ function handleReading(rawValues){
 
   redraw();
 }
+
+function keyPressed(){
+  if(key == "g"){
+    saveGif("output", 10);
+  }
+  
+}

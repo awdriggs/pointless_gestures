@@ -56,6 +56,7 @@ print(f"My IP address is {wifi.radio.ipv4_address}")
 # Sockets Business
 WS_URL = "wss://micro-api.awdokku.site/"
 STREAM_NAME = "shades-of-blue"
+DEVICE_ID = "ams01"
 
 print("\nConnecting to WebSocket server...")
 ws = cpwebsockets.client.connect(WS_URL, wifi.radio)
@@ -67,7 +68,7 @@ ws.send(json.dumps(join_msg))
 print(f"Joined stream: {STREAM_NAME}")
 
 # Test send before camera init
-test_msg = {"type": "data", "values": {"r": 0, "g": 0, "b": 0}}
+test_msg = {"type": "data", "device_id": DEVICE_ID, "values": {"r": 0, "g": 0, "b": 0}}
 print(f"[{time.monotonic():.1f}] Test send before camera...")
 ws.send(json.dumps(test_msg))
 print(f"[{time.monotonic():.1f}] Test send complete")
@@ -234,11 +235,14 @@ while True:
             pwdn.value = True  # HIGH = power down
             cam.deinit()
 
+            temp_c = microcontroller.cpu.temperature
+
             # Send light data
             try:
                 data_msg = {
                     "type": "data",
-                    "values": {"r": r, "g": g, "b": b}
+                    "device_id": DEVICE_ID,
+                    "values": {"r": r, "g": g, "b": b, "temp_c": temp_c}
                 }
                 gc.collect()
                 print(f"[{time.monotonic():.1f}] Sending data... (free: {gc.mem_free()})")

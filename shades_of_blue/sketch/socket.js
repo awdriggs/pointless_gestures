@@ -52,7 +52,7 @@ ws.onmessage = (event) => {
       bars.push(data.values);
 
       if(bars.length > width){
-        bars.shift();
+        bars.shift(); //pops the last one off
       }
     }
   } catch (error) {
