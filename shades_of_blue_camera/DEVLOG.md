@@ -44,6 +44,26 @@ Note: `cam.deinit()` alone (releasing PIO) did not fix the issue. The camera har
 - `../../micro-api/websocket/heartbeat.js` - server heartbeat (30s interval)
 - `../../micro-api/controllers/shadesOfBlueController.js` - server handler for this stream
 
+## 2026-05-11: Future hardware research — XIAO ESP32S3 Sense + Wio-E5 LoRa
+
+explored replacing the pico w + wifi setup with a seeed xiao esp32s3 sense + wio-e5 lora module for lower power consumption.
+
+**pin mapping verdict: no conflicts**
+- camera (OV2640) uses GPIO10-18, 38-40, 47, 48 — all internal via FPC ribbon, none exposed on header
+- wio-e5 connects via UART on D6/D7 (GPIO43/44) — completely free
+- minimum wiring: wio-e5 TX→D7, RX→D6, VCC→3V3, GND→GND, optional RESET→D0
+
+**power workflow (feasible):**
+wake from deep sleep → camera on → capture → process to single color → camera off → lora on → send → deep sleep
+
+**why lora over wifi:**
+wifi connection overhead (AP association, DHCP, TLS) is expensive for infrequent sends. lora transmit is a short burst, module sleeps otherwise. significant battery life improvement.
+
+**open questions:**
+- need a lorawan gateway in range to receive transmissions
+- circuitpython camera support on esp32s3 is less mature than rp2040 — may need arduino/esp-idf instead
+- not pursuing right now, revisit when ready to go more remote/battery-powered
+
 ## 2026-05-08: Temperature + device ID added
 
 - Added `DEVICE_ID = "ams01"` constant, included in all outgoing messages

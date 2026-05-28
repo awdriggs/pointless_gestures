@@ -2,6 +2,7 @@ import board
 import busio  # Use busio for I2C communication
 import digitalio
 import time
+import gc
 from adafruit_as7341 import AS7341
 from adafruit_debouncer import Debouncer
 from os import getenv
@@ -76,6 +77,7 @@ print(f"My IP address is {wifi.radio.ipv4_address}")
 # Sockets Business
 WS_URL = "wss://micro-api.awdokku.site/"
 STREAM_NAME = "shades-of-blue"
+DEVICE_ID = "ams02"
 
 print("\nConnecting to WebSocket server...")
 ws = cpwebsockets.client.connect(WS_URL, wifi.radio)
@@ -86,8 +88,26 @@ join_msg = {"type": "join", "stream": STREAM_NAME}
 ws.send(json.dumps(join_msg))
 print(f"Joined stream: {STREAM_NAME}")
 
-# White balance reference (captured during calibration)
+# White balance reference (loaded from file or captured during calibration)
 white_balance_ref = None
+WB_FILE = "/white_balance.json"
+
+def load_white_balance():
+    global white_balance_ref
+    try:
+        with open(WB_FILE, "r") as f:
+            white_balance_ref = json.load(f)
+        print(f"White balance loaded from {WB_FILE}")
+    except OSError:
+        print("No saved white balance found, running uncalibrated")
+
+def save_white_balance():
+    try:
+        with open(WB_FILE, "w") as f:
+            json.dump(white_balance_ref, f)
+        print(f"White balance saved to {WB_FILE}")
+    except OSError:
+        print("Filesystem not writable (USB connected?), white balance not saved")
 
 def calibrate_white_balance():
     """Capture current spectral reading as white reference for color balancing"""
@@ -108,7 +128,10 @@ def calibrate_white_balance():
 
     print("White balance captured!")
     print(f"Reference: {white_balance_ref}")
+    save_white_balance()
     print("=" * 40)
+
+load_white_balance()
 
 # function to convert spectral values to rgb values
 def rgb():
@@ -148,12 +171,12 @@ def rgb():
     g_int = int(g * 255)
     b_int = int(b * 255)
 
-    return {"r": r_int, "g": g_int, "b": b_int} 
+    return {"r": r_int, "g": g_int, "b": b_int}
 
 # function to get the channel data
 def get_channels(): #package the channels as a dict
-    data = {"F1": sensor.channel_415nm, 
-            "F2": sensor.channel_445nm, 
+    data = {"F1": sensor.channel_415nm,
+            "F2": sensor.channel_445nm,
             "F3": sensor.channel_480nm,
             "F4": sensor.channel_515nm,
             "F5": sensor.channel_555nm,
@@ -183,15 +206,19 @@ def normalize(channels):
         return {key: 0 for key in channels.keys()}
     return {key: value / total for key, value in channels.items()}
 
+gc.collect()
+print(f"Free memory: {gc.mem_free()} bytes")
 
-# while True:
-#     print(rgb())
-#     print("\n------------------------------------------------")
-#     time.sleep(1)
+# Test send before main loop
+test_msg = {"type": "data", "device_id": DEVICE_ID, "values": {"r": 0, "g": 0, "b": 0}}
+print(f"[{time.monotonic():.1f}] Test send...")
+ws.send(json.dumps(test_msg))
+print(f"[{time.monotonic():.1f}] Test send complete")
 
-print("\nStarting streaming light readings...")
+print(f"[{time.monotonic():.1f}] Starting main loop")
 last_send = time.monotonic()
 SEND_INTERVAL = 67.5
+loop_count = 0
 
 while True:
     try:
@@ -208,9 +235,11 @@ while True:
         try:
             msg = ws.recv()  # Non-blocking due to settimeout(0.1)
             if msg:
-                print(f"Received: {msg}")
+                print(f"[{time.monotonic():.1f}] Received: {msg}")
         except:
             pass  # No message available or timeout, that's OK
+
+        loop_count += 1
 
         # Send light readings at regular intervals
         now = time.monotonic()
@@ -219,34 +248,44 @@ while True:
             values = rgb()
             sensor_time = time.monotonic() - sensor_start
 
+            temp_c = microcontroller.cpu.temperature
+            values["temp_c"] = temp_c
+
             # Send light data
             try:
                 data_msg = {
                     "type": "data",
+                    "device_id": DEVICE_ID,
                     "values": values
                 }
+                gc.collect()
+                print(f"[{time.monotonic():.1f}] Sending data... (free: {gc.mem_free()})")
                 ws.send(json.dumps(data_msg))
-                print(f"Sent RGB: {values} (sensor read: {sensor_time*1000:.1f}ms)")
+                print(f"[{time.monotonic():.1f}] Sent RGB: {values} (sensor read: {sensor_time*1000:.1f}ms)")
                 print("-" * 80)
             except Exception as e:
-                print(f"Error sending data: {e}")
+                print(f"[{time.monotonic():.1f}] Error sending data: {e}")
 
             last_send = now
 
     except OSError as e:
-        if e.errno == 32:  # Broken pipe
-            print(f"Connection lost (Error {e.errno})")
-        else:
-            print(f"Error: {e}")
-        print("Reconnecting...")
-        time.sleep(5)
+        print(f"[{time.monotonic():.1f}] OSError: {e} (errno={e.errno})")
         try:
             ws.close()
         except:
             pass
+        if not wifi.radio.connected:
+            print("WiFi lost, reconnecting...")
+            while not wifi.radio.connected:
+                try:
+                    wifi.radio.connect(ssid, password)
+                except Exception as e:
+                    print(f"WiFi failed: {e}, retrying in 5s...")
+                    time.sleep(5)
+            print(f"[{time.monotonic():.1f}] WiFi reconnected")
+        print("Reconnecting WebSocket...")
+        time.sleep(2)
         ws = cpwebsockets.client.connect(WS_URL, wifi.radio)
-        ws.settimeout(0.1)  # Make recv() non-blocking
+        ws.settimeout(0.1)
         ws.send(json.dumps(join_msg))
-
-
- 
+        print(f"[{time.monotonic():.1f}] Reconnected")
