@@ -33,6 +33,9 @@ sensor.astep = 599  # Integration step (affects precision)
 sensor.gain = 8  # Gain: 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 (higher = more sensitive)
 print(f"Sensor configured: atime={sensor.atime}, astep={sensor.astep}, gain={sensor.gain}")
 
+READINGS_N = 10   # samples to average per reading
+MAX_COUNTS = 65535 * 8  # tune: read raw_total in your brightest scene and use that value
+
 # Button for white balance calibration
 button_pin = digitalio.DigitalInOut(board.GP12)
 button_pin.direction = digitalio.Direction.INPUT
@@ -115,16 +118,7 @@ def calibrate_white_balance():
     print("\n=== WHITE BALANCE CALIBRATION ===")
     print("Capturing white reference...")
 
-    # Take 3 quick samples and average (reduced from 5 for speed)
-    samples = []
-    for i in range(3):
-        samples.append(get_channels())
-        time.sleep(0.02)  # Reduced from 0.1s for faster calibration
-
-    # Average the samples
-    white_balance_ref = {}
-    for key in samples[0].keys():
-        white_balance_ref[key] = sum(s[key] for s in samples) / len(samples)
+    white_balance_ref = get_channels_averaged(n=10)
 
     print("White balance captured!")
     print(f"Reference: {white_balance_ref}")
@@ -135,57 +129,50 @@ load_white_balance()
 
 # function to convert spectral values to rgb values
 def rgb():
-    channels = get_channels() # a dict, ignoring the data you don't need
+    channels = get_channels_averaged()
 
-    # print(channels)
+    # brightness from raw total before white balance — dark scenes go toward black
+    raw_total = sum(channels.values())
+    brightness = min(raw_total / MAX_COUNTS, 1.0)
+
     normalized = normalize(channels)
-    # print(normalized)
 
-    # Improved weights based on human color perception
-    # Red: peaks at longer wavelengths (630-680nm)
     r = 0.1 * normalized["F6"] + 0.5 * normalized["F7"] + 1.0 * normalized["F8"]
-
-    # Green: peaks around 530nm, between F4 (515nm) and F5 (555nm)
-    # Reduced F5 weight since 555nm is already yellow-green
     g = 0.1 * normalized["F3"] + 0.6 * normalized["F4"] + 0.4 * normalized["F5"]
-
-    # Blue: peaks around 450nm, include violet channel
     b = 0.3 * normalized["F1"] + 1.0 * normalized["F2"] + 0.5 * normalized["F3"]
 
-    # Scale up brightness (sum normalization produces small values)
-    # Multiply by number of channels to compensate
-    BRIGHTNESS_SCALE = 8.0
-    r *= BRIGHTNESS_SCALE
-    g *= BRIGHTNESS_SCALE
-    b *= BRIGHTNESS_SCALE
-
-    # Normalize RGB values if any exceed 1.0
     max_rgb = max(r, g, b)
-    if max_rgb > 1.0:
+    if max_rgb > 0:
         r /= max_rgb
         g /= max_rgb
         b /= max_rgb
 
-    # convert to a 0-255 scale:
-    r_int = int(r * 255)
-    g_int = int(g * 255)
-    b_int = int(b * 255)
+    r_int = int(r * brightness * 255)
+    g_int = int(g * brightness * 255)
+    b_int = int(b * brightness * 255)
 
     return {"r": r_int, "g": g_int, "b": b_int}
 
 # function to get the channel data
-def get_channels(): #package the channels as a dict
-    data = {"F1": sensor.channel_415nm,
-            "F2": sensor.channel_445nm,
-            "F3": sensor.channel_480nm,
-            "F4": sensor.channel_515nm,
-            "F5": sensor.channel_555nm,
-            "F6": sensor.channel_590nm,
-            "F7": sensor.channel_630nm,
-            "F8": sensor.channel_680nm
-            }
+def get_channels():
+    return {
+        "F1": sensor.channel_415nm,
+        "F2": sensor.channel_445nm,
+        "F3": sensor.channel_480nm,
+        "F4": sensor.channel_515nm,
+        "F5": sensor.channel_555nm,
+        "F6": sensor.channel_590nm,
+        "F7": sensor.channel_630nm,
+        "F8": sensor.channel_680nm,
+    }
 
-    return data
+def get_channels_averaged(n=READINGS_N):
+    sums = {k: 0 for k in ["F1","F2","F3","F4","F5","F6","F7","F8"]}
+    for _ in range(n):
+        ch = get_channels()
+        for k in sums:
+            sums[k] += ch[k]
+    return {k: v / n for k, v in sums.items()}
 
 # function that normalizes according to total spectral intensity
 def normalize(channels):
