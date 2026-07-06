@@ -8,7 +8,7 @@
 #define LORA_SF        7
 #define LORA_CR        5
 #define LORA_POWER     14
-#define SLEEP_SECONDS  45
+#define SLEEP_SECONDS  60
 #define SAMPLE_STEP    4
 
 #define AVG_LINEAR_RGB       0
@@ -40,7 +40,7 @@ SX1262 radio = new Module(D4, D1, D2, D3, loraSPI);  // NSS, DIO1, RST, BUSY
 
 void setup() {
   Serial.begin(115200);
-  delay(5000);
+  if (esp_reset_reason() == ESP_RST_POWERON) delay(10000);
   Serial.println("\n--- wake ---");
 
   // --- Camera ---
@@ -84,8 +84,8 @@ void setup() {
   s->set_exposure_ctrl(s, 0); // manual exposure
   s->set_aec_value(s, 7);
 
-  // Drain frames to let AEC settle
-  for (int i = 0; i < 10; i++) {
+  // Drain frames to let sensor stabilize — 30 frames needed at low light/after standby
+  for (int i = 0; i < 30; i++) {
     camera_fb_t* fb = esp_camera_fb_get();
     esp_camera_fb_return(fb);
   }
@@ -100,6 +100,13 @@ void setup() {
   uint8_t r, g, b;
   averageColor(fb, AVG_MODE, r, g, b);
   esp_camera_fb_return(fb);
+
+  // Put OV3660 into hardware standby before deinit — PWDN is not wired on the
+  // Sense expansion board so this register write is the only way to reduce
+  // camera current in deep sleep (~40mA → ~1.4mA)
+  s = esp_camera_sensor_get();
+  s->set_reg(s, 0x3008, 0xFF, 0x42);
+
   esp_camera_deinit();
 
   Serial.printf("RGB: %d,%d,%d\n", r, g, b);

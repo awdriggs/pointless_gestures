@@ -153,8 +153,71 @@
 - Both degrade above 40°C (sealed enclosure in direct sun is a risk) and cannot be safely charged below 0°C
 - LiPo flat pouch easier to fit in weatherproof enclosure
 
+**Sleep current investigation**
+- Reference: [How to measure power consumption of a microcontroller — Nordic Power Profiler Kit II](https://www.haraldkreuzer.net/en/news/how-measure-power-consumption-microcontroller-nordic-power-profiler-kit-ii)
+- Measured with multimeter in series (200mA range):
+  - Sleep: 40.1mA — way too high
+  - Active (camera init + AEC settle): ~76mA for ~5s
+  - Peak (JPEG capture + LoRa TX): ~128mA for ~1s
+- Root cause: OV3660 PWDN pin is permanently tied to 3.3V on the Sense expansion board — not wired to any GPIO, so `PWDN_GPIO_NUM = -1` reflects hardware reality
+- D11/D12 are the PDM microphone pins (GPIO42/41), not camera power — not useful without cutting solder jumpers J1/J2
+
+**Fix: OV3660 register standby**
+- Put camera into hardware standby via register write before `esp_camera_deinit()`:
+  ```cpp
+  s = esp_camera_sensor_get();
+  s->set_reg(s, 0x3008, 0xFF, 0x42);  // OV3660 standby
+  ```
+- Result: sleep current dropped from 40.1mA → 0.7mA ✓
+- New daily budget: ~19mAh/day (was ~960mAh)
+- 2500mAh battery now provides 130+ days without solar; 0.64W panel easily covers deficit
+
+**Evening test (evening_test.png)**
+- Two anomalous bright blue spikes visible in otherwise near-black twilight readings
+- Root cause: OV3660 coming out of register standby with sensor pipeline in indeterminate state; at low light (fixed aec=7, near-dark) signal-to-noise is poor so a single bad frame dominates the average
+- In bright daylight the effect is masked by strong signal — spikes only visible at twilight
+- Fix: increased frame drain from 10 → 30 frames to give sensor more time to stabilize after standby
+- Sleep cycle changed from 45s → 60s — reduces daily active cycles from 1920 to 1440, saving ~72mAh/day net even accounting for the extra drain frames
+- Note: 1440 readings/day no longer maps 1:1 to a 1920px wide display
+
 **Pending**
-- Wire NTC thermistor to bq24074 for cold-charge protection
-- Measure actual sleep current draw
-- Upgrade to 1W solar panel
+- Wire NTC thermistor to bq24074 for cold-charge protection before winter
+- 1W solar panel upgrade (nice-to-have, no longer critical)
+- Update `xiao_camera_avg` and `xiao_cam_lora_tx` building block sketches with center crop + JPEG decode pipeline
+
+---
+
+## 2026-07-06
+
+**Charger swap: bq24074 → Adafruit BQ25185 (3.3V buck variant)**
+- bq24074 has no input voltage management — panel voltage can collapse under load in low light; confirmed as root cause of battery drain over consecutive overcast days
+- BQ25185 has VIN_DPM: backs off charge current to keep VIN stable; much better match for solar
+- Input range 5–18V; 6V Voltaic panel is ideal
+- Wiring: solar (+) → VIN, LiPo → BAT, BQ25185 3V3 → XIAO 3.3V pin, GND → GND
+- 3V3 output connects directly to XIAO 3.3V pin, bypassing XIAO's internal regulator
+- Note: disconnect 3V3 wire if USB behavior is erratic during programming (both rails at 3.3V usually tolerable for brief sessions)
+
+**BQ25185 CE pin — not exposed**
+- CE is hardwired to GND on the Adafruit board; no firmware workaround for the 6-hour safety timer
+- Fault behavior: thermal shutdown, input OVP, and UVLO all auto-recover when condition clears; safety timer is the only latching fault
+
+**Safety timer analysis — not a practical concern**
+- Timer resets whenever VIN is removed and reapplied
+- Cloud cover naturally interrupts VIN throughout the day, resetting the timer
+- Every night panel output drops to zero → VIN falls below UVLO → timer resets at dawn
+- 6-hour latch would require 6 continuous hours of steady weak input from a depleted battery with no dips — essentially impossible given nightly reset and variable weather
+
+**Solar panel upgrade: Voltaic P124 (1.2W, 6V)**
+- Doubles harvest vs 0.64W panel; further reduces any scenario where battery stays depleted long enough for timer to matter
+
+**Fix: startup delay**
+- `delay(10000)` was running on every deep sleep wake — 1440 wakes/day burning ~500–700mAh/day
+- Fixed: delay now only runs on `ESP_RST_POWERON` (initial power-on), skipped on all deep sleep wakes
+  ```cpp
+  if (esp_reset_reason() == ESP_RST_POWERON) delay(10000);
+  ```
+- Returns consumption to ~19mAh/day
+
+**Pending**
+- Order and wire Adafruit BQ25185 (3.3V buck) + Voltaic P124
 - Update `xiao_camera_avg` and `xiao_cam_lora_tx` building block sketches with center crop + JPEG decode pipeline
